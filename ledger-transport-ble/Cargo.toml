@@ -1,11 +1,11 @@
 [package]
-name = "ledger-transport-ble"
-description = "Ledger Hardware Wallet - HID Transport"
-version = "0.10.0"
+name = "ledger-bluetooth"
+description = "Ledger Hardware Wallet - Bluetooth Transport"
+version = "0.1.0"
 license = "Apache-2.0"
 authors = ["Eric Woolsey <ewoolsey@ualberta.ca>"]
-homepage = "https://github.com/zondax/ledger-rs"
-repository = "https://github.com/zondax/ledger-rs"
+homepage = "https://github.com/ewoolsey/ledger-bluetooth"
+repository = "https://github.com/ewoolsey/ledger-bluetooth"
 readme = "README.md"
 categories  = ["authentication", "cryptography"]
 keywords = ["ledger", "nano", "blue", "apdu", "bluetooth"]
@@ -16,14 +16,12 @@ libc = "0.2"
 byteorder = "1.4"
 cfg-if = "1.0.0"
 thiserror = "1.0"
-hex = "0.4"
 log = { version = "0.4", features = ["std"] }
 
 btleplug = "0.10"
 tokio = { version = "1", features = ["macros"] }
 futures = "0.3"
 uuid = "1"
-lazy_static = "1"
 
 ledger-transport = "0.10"
 

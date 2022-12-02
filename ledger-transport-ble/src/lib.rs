@@ -1,6 +1,4 @@
 /*******************************************************************************
-*   (c) 2022 Zondax AG
-*
 *  Licensed under the Apache License, Version 2.0 (the "License");
 *  you may not use this file except in compliance with the License.
 *  You may obtain a copy of the License at
@@ -46,20 +44,6 @@ const NANO_X_UUID: Uuid = Uuid::from_fields(
 
 const MTU_COMMAND_TAG: u8 = 0x08;
 const APDU_COMMAND_TAG: u8 = 0x05;
-
-// lazy_static! {
-//     static ref LEDGER_UUID: Uuid = Uuid::"9c332c11-e85b-3c29-536c-50c4d347ed4d";
-//     static ref WRITE_UUID: &str = "13d63400-2c97-0004-0002-4c6564676572";
-//     static ref NOTIFY_UUID: &str = "13d63400-2c97-0004-0001-4c6564676572";
-// }
-
-// struct MtuResponse {
-//     mtu: u8,
-// }
-
-// struct ApduResponse {
-//     apdu: Vec<u8>,
-// }
 
 #[derive(Debug)]
 struct Request {
