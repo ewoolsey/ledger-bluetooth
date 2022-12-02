@@ -22,6 +22,7 @@ pub use errors::LedgerHIDError;
 use byteorder::BigEndian;
 
 use futures::StreamExt;
+use log::info;
 use uuid::Uuid;
 
 use std::collections::VecDeque;
@@ -36,26 +37,12 @@ use std::time::Duration;
 use tokio::time;
 
 //  "9c332c11-e85b-3c29-536c-50c4d347ed4d"
-const LEDGER_UUID: Uuid = Uuid::from_fields(
+const NANO_X_UUID: Uuid = Uuid::from_fields(
     0x9c332c11,
     0xe85b,
     0x3c29,
     &[0x53, 0x6c, 0x50, 0xc4, 0xd3, 0x47, 0xed, 0x4d],
 );
-
-// const WRITE_UUID: Uuid = Uuid::from_fields(
-//     0x13d63400,
-//     0x2c97,
-//     0x0004,
-//     &[0x00, 0x02, 0x4c, 0x65, 0x64, 0x67, 0x65, 0x72],
-// );
-
-// const NOTIFY_UUID: Uuid = Uuid::from_fields(
-//     0x13d63400,
-//     0x2c97,
-//     0x0004,
-//     &[0x00, 0x01, 0x4c, 0x65, 0x64, 0x67, 0x65, 0x72],
-// );
 
 const MTU_COMMAND_TAG: u8 = 0x08;
 const APDU_COMMAND_TAG: u8 = 0x05;
@@ -121,7 +108,7 @@ impl TryFrom<Vec<u8>> for InitialPacket {
 #[derive(Debug)]
 struct SubsequentPacket {
     command_tag: u8,
-    packet_sequence_index: u16, // big endian
+    _packet_sequence_index: u16, // big endian
     payload: Vec<u8>,
 }
 
@@ -149,7 +136,7 @@ impl TryFrom<Vec<u8>> for SubsequentPacket {
         };
         Ok(SubsequentPacket {
             command_tag: value[0],
-            packet_sequence_index: u16::from_be_bytes(value[1..3].try_into().unwrap()),
+            _packet_sequence_index: u16::from_be_bytes(value[1..3].try_into().unwrap()),
             payload,
         })
     }
@@ -164,7 +151,7 @@ pub struct TransportNativeBle {
 
 impl TransportNativeBle {
     fn is_ledger(peripheral: &platform::Peripheral) -> bool {
-        peripheral.id() == PeripheralId::from(LEDGER_UUID)
+        peripheral.id() == PeripheralId::from(NANO_X_UUID)
     }
 
     /// Get a list of ledger devices available
@@ -185,7 +172,6 @@ impl TransportNativeBle {
             }
         }
         Ok(vec![])
-        //api.device_list().filter(|dev| Self::is_ledger(dev))
     }
 
     /// Create a new HID transport, connecting to the first ledger found
@@ -253,7 +239,7 @@ impl TransportNativeBle {
             .enumerate()
             .map(|(i, payload)| SubsequentPacket {
                 command_tag: 0x03,
-                packet_sequence_index: i as u16 + 1,
+                _packet_sequence_index: i as u16 + 1,
                 payload: payload.to_vec(),
             })
             .collect::<Vec<_>>();
@@ -262,7 +248,7 @@ impl TransportNativeBle {
         self.device.subscribe(&self.notify_characteristic).await?;
 
         // Write the initial packet
-        println!("writing initial packet {:?}", initial_packet);
+        info!("writing initial packet {:#?}", initial_packet);
         self.device
             .write(
                 &self.write_characteristic,
@@ -273,7 +259,7 @@ impl TransportNativeBle {
 
         // Write the subsequent packets
         for packet in subsequent_packets {
-            println!("writing subsequent packet");
+            info!("writing subsequent packet {:#?}", packet);
             self.device
                 .write(
                     &self.write_characteristic,
@@ -287,15 +273,14 @@ impl TransportNativeBle {
     }
 
     async fn read_response(&self) -> Result<Vec<u8>, LedgerHIDError> {
-        // Print the first 4 notifications received.
         let mut buffer = Vec::new();
         let mut stream = self.device.notifications().await?;
         let initial_packet: InitialPacket = stream.next().await.unwrap().value.try_into()?;
-        println!("initial packet {:?}", initial_packet);
+        info!("reading initial packet {:#?}", initial_packet);
         buffer.extend(initial_packet.payload);
         while buffer.len() < initial_packet.data_length as usize {
             let packet: SubsequentPacket = stream.next().await.unwrap().value.try_into()?;
-            println!("packet {:?}", packet);
+            info!("reading subsequent packet {:#?}", packet);
             buffer.extend(packet.payload);
         }
         Ok(buffer)
@@ -306,8 +291,6 @@ impl TransportNativeBle {
             command_tag: MTU_COMMAND_TAG,
             payload: Vec::new(),
         };
-        println!("self {:?}", self);
-
         self.write_request(request, 0xff).await?;
         self.read_response().await.map(|x| x[0])
     }
@@ -321,57 +304,6 @@ impl TransportNativeBle {
         Self::write_request(self, request, mtu).await?;
         Ok(())
     }
-
-    // fn read_apdu(&self) -> Result<Vec<u8>, LedgerHIDError> {
-    //     let mut buffer = vec![0u8; LEDGER_PACKET_READ_SIZE as usize];
-    //     let mut sequence_idx = 0u16;
-    //     let mut expected_apdu_len = 0usize;
-
-    //     loop {
-    //         let res = device.read_timeout(&mut buffer, LEDGER_TIMEOUT)?;
-
-    //         if (sequence_idx == 0 && res < 7) || res < 5 {
-    //             return Err(LedgerHIDError::Comm("Read error. Incomplete header"));
-    //         }
-
-    //         let mut rdr = Cursor::new(&buffer);
-
-    //         let rcv_channel = rdr.read_u16::<BigEndian>()?;
-    //         let rcv_tag = rdr.read_u8()?;
-    //         let rcv_seq_idx = rdr.read_u16::<BigEndian>()?;
-
-    //         if rcv_channel != channel {
-    //             return Err(LedgerHIDError::Comm("Invalid channel"));
-    //         }
-    //         if rcv_tag != 0x05u8 {
-    //             return Err(LedgerHIDError::Comm("Invalid tag"));
-    //         }
-
-    //         if rcv_seq_idx != sequence_idx {
-    //             return Err(LedgerHIDError::Comm("Invalid sequence idx"));
-    //         }
-
-    //         if rcv_seq_idx == 0 {
-    //             expected_apdu_len = rdr.read_u16::<BigEndian>()? as usize;
-    //         }
-
-    //         let available: usize = buffer.len() - rdr.position() as usize;
-    //         let missing: usize = expected_apdu_len - apdu_answer.len();
-    //         let end_p = rdr.position() as usize + std::cmp::min(available, missing);
-
-    //         let new_chunk = &buffer[rdr.position() as usize..end_p];
-
-    //         info!("[{:3}] << {:}", new_chunk.len(), hex::encode(&new_chunk));
-
-    //         apdu_answer.extend_from_slice(new_chunk);
-
-    //         if apdu_answer.len() >= expected_apdu_len {
-    //             return Ok(apdu_answer.len());
-    //         }
-
-    //         sequence_idx += 1;
-    //     }
-    // }
 
     pub async fn exchange<I: Deref<Target = [u8]>>(
         &self,
@@ -405,8 +337,9 @@ impl Exchange for TransportNativeBle {
 mod integration_tests {
     use crate::TransportNativeBle;
     use btleplug::platform;
+    use byteorder::{BigEndian, WriteBytesExt};
     use ledger_transport::APDUCommand;
-    use log::info;
+    use log::{debug, info};
 
     use serial_test::serial;
 
@@ -419,11 +352,9 @@ mod integration_tests {
     async fn ledger_device_path() {
         init_logging();
         let manager = platform::Manager::new().await.unwrap();
-
         let ledgers = TransportNativeBle::list_ledgers(&manager).await.unwrap();
-
         for ledger in ledgers {
-            println!("{:?}", ledger);
+            info!("{:#?}", ledger);
         }
     }
 
@@ -431,11 +362,9 @@ mod integration_tests {
     #[serial]
     async fn test_get_mtu() {
         let manager = platform::Manager::new().await.unwrap();
-
         let ledger = TransportNativeBle::new(&manager).await.unwrap();
-
         let mtu = ledger.get_mtu().await.unwrap();
-        println!("mtu: {}", mtu);
+        info!("mtu: {}", mtu);
     }
 
     #[tokio::test]
@@ -452,29 +381,35 @@ mod integration_tests {
         };
         let res = ledger.exchange(&command).await;
 
-        println!("res: {:?}", res);
+        info!("res: {:#?}", res);
     }
 
     #[tokio::test]
     #[serial]
-    async fn exchange() {
-        use ledger_zondax_generic::{App, AppExt};
-        struct Dummy;
-        impl App for Dummy {
-            const CLA: u8 = 0;
-        }
-
+    async fn test_get_pub_key() {
         let manager = platform::Manager::new().await.unwrap();
+        let ledger = TransportNativeBle::new(&manager).await.unwrap();
 
-        init_logging();
+        let hrp = b"cosmos";
+        debug!("hrp: {:?}", hrp);
 
-        let ledger = TransportNativeBle::new(&manager)
-            .await
-            .expect("Could not get a device");
+        let mut get_addr_payload: Vec<u8> = Vec::new();
+        get_addr_payload.write_u8(hrp.len() as u8).unwrap(); // hrp len
+        get_addr_payload.extend(hrp); // hrp
+        get_addr_payload.write_u32::<BigEndian>(44).unwrap();
+        get_addr_payload.write_u32::<BigEndian>(118).unwrap();
+        get_addr_payload.write_u32::<BigEndian>(0).unwrap();
+        get_addr_payload.write_u32::<BigEndian>(0).unwrap();
+        get_addr_payload.write_u32::<BigEndian>(0).unwrap();
+        let command = APDUCommand {
+            cla: 0x55,
+            ins: 0x04,
+            p1: 0x00,
+            p2: 0x00,
+            data: get_addr_payload,
+        };
+        let res = ledger.exchange(&command).await;
 
-        // use device info command that works in the dashboard
-        let result = futures::executor::block_on(Dummy::get_device_info(&ledger))
-            .expect("Error during exchange");
-        info!("{:x?}", result);
+        info!("res: {:#?}", res);
     }
 }
