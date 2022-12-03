@@ -15,7 +15,7 @@ mod errors;
 use btleplug::api::{
     Central, CharPropFlags, Characteristic, Manager, Peripheral, ScanFilter, WriteType,
 };
-pub use errors::LedgerHIDError;
+pub use errors::LedgerBleError;
 
 use byteorder::BigEndian;
 
@@ -70,11 +70,11 @@ impl InitialPacket {
 }
 
 impl TryFrom<Vec<u8>> for InitialPacket {
-    type Error = LedgerHIDError;
+    type Error = LedgerBleError;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         if value.len() < 5 {
-            return Err(LedgerHIDError::InvalidPacket);
+            return Err(LedgerBleError::InvalidPacket);
         }
         let payload = if value.len() == 5 {
             Vec::new()
@@ -107,11 +107,11 @@ impl SubsequentPacket {
 }
 
 impl TryFrom<Vec<u8>> for SubsequentPacket {
-    type Error = LedgerHIDError;
+    type Error = LedgerBleError;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         if value.len() < 3 {
-            return Err(LedgerHIDError::InvalidPacket);
+            return Err(LedgerBleError::InvalidPacket);
         }
         let payload = if value.len() == 3 {
             Vec::new()
@@ -141,7 +141,7 @@ impl TransportNativeBle {
     /// Get a list of ledger devices available
     pub async fn list_ledgers(
         manager: &platform::Manager,
-    ) -> Result<Vec<platform::Peripheral>, LedgerHIDError> {
+    ) -> Result<Vec<platform::Peripheral>, LedgerBleError> {
         let adapter_list = manager.adapters().await?;
 
         for adapter in adapter_list.iter() {
@@ -158,56 +158,39 @@ impl TransportNativeBle {
         Ok(vec![])
     }
 
-    /// Create a new HID transport, connecting to the first ledger found
-    /// # Warning
-    /// Opening the same device concurrently will lead to device lock after the first handle is closed
-    /// see [issue](https://github.com/ruabmbua/hidapi-rs/issues/81)
-    pub async fn new(manager: &platform::Manager) -> Result<Self, LedgerHIDError> {
-        let peripheral = Self::list_ledgers(manager)
-            .await?
-            .pop()
-            .ok_or(LedgerHIDError::DeviceNotFound)?;
-
-        Self::open_device(peripheral).await
-    }
-
-    /// Open a specific ledger device
-    ///
-    /// # Note
-    /// No checks are made to ensure the device is a ledger device
-    ///
-    /// # Warning
-    /// Opening the same device concurrently will lead to device lock after the first handle is closed
-    /// see [issue](https://github.com/ruabmbua/hidapi-rs/issues/81)
-    pub async fn open_device(peripheral: platform::Peripheral) -> Result<Self, LedgerHIDError> {
-        if !peripheral.is_connected().await? {
-            peripheral.connect().await?;
+    /// Create a new BLE transport, returns a vector of available devices
+    pub async fn new(manager: &platform::Manager) -> Result<Vec<Self>, LedgerBleError> {
+        let ledgers = Self::list_ledgers(manager).await?;
+        if ledgers.is_empty() {
+            return Err(LedgerBleError::DeviceNotFound);
         }
 
-        peripheral.discover_services().await?;
+        let mut output = Vec::new();
+        for ledger in ledgers {
+            ledger.discover_services().await?;
 
-        let write_characteristic = peripheral
-            .characteristics()
-            .into_iter()
-            .find(|x| x.properties.contains(CharPropFlags::WRITE))
-            .unwrap();
+            let write_characteristic = ledger
+                .characteristics()
+                .into_iter()
+                .find(|x| x.properties.contains(CharPropFlags::WRITE))
+                .unwrap();
 
-        let notify_characteristic = peripheral
-            .characteristics()
-            .into_iter()
-            .find(|x| x.properties.contains(CharPropFlags::NOTIFY))
-            .unwrap();
+            let notify_characteristic = ledger
+                .characteristics()
+                .into_iter()
+                .find(|x| x.properties.contains(CharPropFlags::NOTIFY))
+                .unwrap();
 
-        let ledger = TransportNativeBle {
-            device: peripheral,
-            write_characteristic,
-            notify_characteristic,
-        };
-
-        Ok(ledger)
+            output.push(TransportNativeBle {
+                device: ledger,
+                write_characteristic,
+                notify_characteristic,
+            });
+        }
+        Ok(output)
     }
 
-    async fn write_request(&self, request: Request, mtu: u8) -> Result<(), LedgerHIDError> {
+    async fn write_request(&self, request: Request, mtu: u8) -> Result<(), LedgerBleError> {
         // First we build the individual packets
         let mut payloads = request
             .payload
@@ -256,7 +239,7 @@ impl TransportNativeBle {
         Ok(())
     }
 
-    async fn read_response(&self) -> Result<Vec<u8>, LedgerHIDError> {
+    async fn read_response(&self) -> Result<Vec<u8>, LedgerBleError> {
         let mut buffer = Vec::new();
         let mut stream = self.device.notifications().await?;
         let initial_packet: InitialPacket = stream.next().await.unwrap().value.try_into()?;
@@ -270,7 +253,7 @@ impl TransportNativeBle {
         Ok(buffer)
     }
 
-    async fn get_mtu(&self) -> Result<u8, LedgerHIDError> {
+    async fn get_mtu(&self) -> Result<u8, LedgerBleError> {
         let request = Request {
             command_tag: MTU_COMMAND_TAG,
             payload: Vec::new(),
@@ -279,7 +262,7 @@ impl TransportNativeBle {
         self.read_response().await.map(|x| x[0])
     }
 
-    async fn write_apdu(&self, apdu_command: &[u8]) -> Result<(), LedgerHIDError> {
+    async fn write_apdu(&self, apdu_command: &[u8]) -> Result<(), LedgerBleError> {
         let request = Request {
             command_tag: APDU_COMMAND_TAG,
             payload: apdu_command.to_vec(),
@@ -292,18 +275,18 @@ impl TransportNativeBle {
     pub async fn exchange<I: Deref<Target = [u8]>>(
         &self,
         command: &APDUCommand<I>,
-    ) -> Result<APDUAnswer<Vec<u8>>, LedgerHIDError> {
+    ) -> Result<APDUAnswer<Vec<u8>>, LedgerBleError> {
         self.write_apdu(&command.serialize()).await?;
 
         let answer = self.read_response().await?;
 
-        APDUAnswer::from_answer(answer).map_err(|_| LedgerHIDError::Comm("response was too short"))
+        APDUAnswer::from_answer(answer).map_err(|_| LedgerBleError::Comm("response was too short"))
     }
 }
 
 #[async_trait]
 impl Exchange for TransportNativeBle {
-    type Error = LedgerHIDError;
+    type Error = LedgerBleError;
     type AnswerType = Vec<u8>;
 
     async fn exchange<I>(
@@ -321,7 +304,7 @@ impl Exchange for TransportNativeBle {
 mod integration_tests {
     use crate::TransportNativeBle;
     use btleplug::platform;
-    use byteorder::{BigEndian, WriteBytesExt};
+    use byteorder::{LittleEndian, WriteBytesExt};
     use ledger_transport::APDUCommand;
     use log::{debug, info};
 
@@ -346,8 +329,8 @@ mod integration_tests {
     #[serial]
     async fn test_get_mtu() {
         let manager = platform::Manager::new().await.unwrap();
-        let ledger = TransportNativeBle::new(&manager).await.unwrap();
-        let mtu = ledger.get_mtu().await.unwrap();
+        let ledgers = TransportNativeBle::new(&manager).await.unwrap();
+        let mtu = ledgers[0].get_mtu().await.unwrap();
         info!("mtu: {}", mtu);
     }
 
@@ -355,7 +338,11 @@ mod integration_tests {
     #[serial]
     async fn test_get_version() {
         let manager = platform::Manager::new().await.unwrap();
-        let ledger = TransportNativeBle::new(&manager).await.unwrap();
+        let ledger = TransportNativeBle::new(&manager)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
         let command = APDUCommand {
             cla: 0x55,
             ins: 0x00,
@@ -372,7 +359,11 @@ mod integration_tests {
     #[serial]
     async fn test_get_pub_key() {
         let manager = platform::Manager::new().await.unwrap();
-        let ledger = TransportNativeBle::new(&manager).await.unwrap();
+        let ledger = TransportNativeBle::new(&manager)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
 
         let hrp = b"cosmos";
         debug!("hrp: {:?}", hrp);
@@ -380,11 +371,15 @@ mod integration_tests {
         let mut get_addr_payload: Vec<u8> = Vec::new();
         get_addr_payload.write_u8(hrp.len() as u8).unwrap(); // hrp len
         get_addr_payload.extend(hrp); // hrp
-        get_addr_payload.write_u32::<BigEndian>(44).unwrap();
-        get_addr_payload.write_u32::<BigEndian>(118).unwrap();
-        get_addr_payload.write_u32::<BigEndian>(0).unwrap();
-        get_addr_payload.write_u32::<BigEndian>(0).unwrap();
-        get_addr_payload.write_u32::<BigEndian>(0).unwrap();
+        get_addr_payload
+            .write_u32::<LittleEndian>(44 + 0x80000000)
+            .unwrap();
+        get_addr_payload
+            .write_u32::<LittleEndian>(118 + 0x80000000)
+            .unwrap();
+        get_addr_payload.write_u32::<LittleEndian>(0).unwrap();
+        get_addr_payload.write_u32::<LittleEndian>(0).unwrap();
+        get_addr_payload.write_u32::<LittleEndian>(0).unwrap();
         let command = APDUCommand {
             cla: 0x55,
             ins: 0x04,

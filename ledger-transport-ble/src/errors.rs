@@ -18,7 +18,7 @@ use btleplug::platform;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum LedgerHIDError {
+pub enum LedgerBleError {
     /// Device not found error
     #[error("Ledger device not found")]
     DeviceNotFound,
