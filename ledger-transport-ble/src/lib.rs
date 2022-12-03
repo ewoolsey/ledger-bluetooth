@@ -167,6 +167,9 @@ impl TransportNativeBle {
 
         let mut output = Vec::new();
         for ledger in ledgers {
+            if !ledger.is_connected().await? {
+                ledger.connect().await?;
+            }
             ledger.discover_services().await?;
 
             let write_characteristic = ledger
