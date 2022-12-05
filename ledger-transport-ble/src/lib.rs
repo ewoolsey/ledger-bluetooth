@@ -193,6 +193,32 @@ impl TransportNativeBle {
         Ok(output)
     }
 
+    /// Create a new BLE transport, returns a vector of available devices
+    pub async fn connect(peripheral: platform::Peripheral) -> Result<Self, LedgerBleError> {
+        if !peripheral.is_connected().await? {
+            peripheral.connect().await?;
+        }
+        peripheral.discover_services().await?;
+
+        let write_characteristic = peripheral
+            .characteristics()
+            .into_iter()
+            .find(|x| x.properties.contains(CharPropFlags::WRITE))
+            .unwrap();
+
+        let notify_characteristic = peripheral
+            .characteristics()
+            .into_iter()
+            .find(|x| x.properties.contains(CharPropFlags::NOTIFY))
+            .unwrap();
+
+        Ok(TransportNativeBle {
+            device: peripheral,
+            write_characteristic,
+            notify_characteristic,
+        })
+    }
+
     async fn write_request(&self, request: Request, mtu: u8) -> Result<(), LedgerBleError> {
         // First we build the individual packets
         let mut payloads = request
